@@ -10,7 +10,7 @@ TF-IDF, et DistilBERT pré-entraîné avec une tête de classification.
 Contenu
 -------
 - projet.ipynb : le notebook complet (données, trois systèmes, évaluation).
-- rapport.tex  : le rapport (à compiler en PDF, voir plus bas).
+- rapport.pdf  : le rapport.
 - README.txt   : ce fichier.
 
 
@@ -26,7 +26,6 @@ Installation (dans un environnement virtuel) :
   pip install pandas pyarrow numpy matplotlib scikit-learn transformers ipykernel
   pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-Aucun GPU n'est nécessaire.
 
 
 Données
@@ -47,11 +46,3 @@ Exécution
 L'exécution complète prend environ une minute sur CPU (hors téléchargements).
 La seed est fixée (SEED = 213) : le découpage et les scores sont reproductibles.
 Les temps d'entraînement et d'inférence varient selon la machine.
-
-
-Compiler le rapport
--------------------
-  pdflatex rapport.tex
-
-ou importer rapport.tex dans Overleaf. Seuls des paquets LaTeX standards sont
-utilisés.
