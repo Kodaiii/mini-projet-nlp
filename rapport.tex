@@ -1,0 +1,153 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\setlist{itemsep=2pt, topsep=4pt}
+
+\title{Mini-projet NLP : football ou basket-ball ?\\[4pt]
+\large Comparaison de trois approches de classification de textes}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.5cm}
+
+\section{Cas d'usage et données}
+
+\paragraph{Besoin.} À partir d'une courte description d'une action de jeu, retrouver automatiquement le sport concerné, par exemple pour ranger des commentaires ou des résumés de match. Deux classes : \textbf{football} (américain : \emph{quarterback}, \emph{touchdown}\ldots) et \textbf{basket-ball}.
+
+\paragraph{Données.} Le jeu \texttt{its-zion-18/sports-text-dataset} (Hugging Face), en anglais. Il existe en deux versions : \texttt{original} (100 textes) et \texttt{augmented} (1\,000 textes). On utilise la version augmentée, construite en déclinant chacun des 100 textes originaux en 10 variantes (reformulations, fautes de frappe ou simples copies) : la ligne $i$ est une variante du texte $i \bmod 100$.
+
+\paragraph{Exploration.} 308 lignes sont des doublons (casse ignorée) et sont supprimées : il reste \textbf{692 textes uniques}, environ 7 par texte original. Les classes sont équilibrées (352 football, 340 basket-ball), les textes sont courts (une trentaine de mots) et de longueur comparable d'une classe à l'autre. Le vocabulaire est très marqué, mais certains mots sont communs aux deux sports (\emph{defense}, \emph{score}, \emph{team}).
+
+\paragraph{Protocole.} Les variantes d'un même texte se ressemblant beaucoup, un découpage aléatoire des lignes mettrait des quasi-copies dans le train et le test. On découpe donc les \textbf{100 textes originaux} en 60/20/20 (stratifié par classe), et chaque variante suit son original :
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & train & validation & test \\
+\midrule
+Textes & 421 & 139 & 132 \\
+Textes originaux & 60 & 20 & 20 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Le même découpage sert aux trois systèmes. Règles, vocabulaire et poids sont appris sur le train, les hyperparamètres sont fixés en regardant la validation, et le test n'est utilisé qu'une fois, à la fin. La seed est fixée (213). Un nettoyage commun produit une colonne \texttt{tokens} : minuscules, suites de lettres uniquement, suppression des mots outils anglais (liste de scikit-learn) et des mots d'une lettre.
+
+\section{Les trois systèmes}
+
+\subsection{Règles à base de mots-clés (sans apprentissage)}
+
+Pour chaque classe, on garde les \textbf{15 mots les plus fréquents du train qui n'apparaissent jamais dans l'autre classe}. Ce filtre écarte les mots partagés (\emph{team}, \emph{game}, \emph{ball}, \emph{ability}\ldots) qui dominent les fréquences brutes des deux classes.
+
+\begin{itemize}
+  \item \textbf{Football} : quarterback, running, touchdown, defense, deep, zone, field, lines, short, territory, receiver, yardage, tackle, wide, catching.
+  \item \textbf{Basket-ball} : player, shot, hits, basket, pointer, clutch, shooting, free, court, rebound, fouled, lay, throw, jumper, fast.
+\end{itemize}
+
+Un texte est attribué au sport dont il contient le plus de mots-clés. En cas d'égalité (y compris aucun mot trouvé), on choisit football, la classe majoritaire du train.
+
+\textbf{Limites attendues} : fautes de frappe (\emph{rceeiver} n'est pas reconnu), absence de contexte, mots génériques restés dans les lexiques (\emph{player}, \emph{fast}, \emph{short}), vocabulaire limité à 15 mots par sport, et choix par défaut qui pénalise toujours le basket-ball.
+
+\subsection{MLP sur TF-IDF (PyTorch)}
+
+Les tokens sont transformés en vecteurs TF-IDF (vocabulaire de 982 mots appris sur le train), puis passés dans un réseau \texttt{TF-IDF $\to$ Linear(32) $\to$ ReLU $\to$ Dropout(0,3) $\to$ Linear(2)}, soit environ 31\,500 poids, entraîné avec l'entropie croisée.
+
+\begin{center}
+\small
+\begin{tabular}{llp{8.5cm}}
+\toprule
+Hyperparamètre & Valeur & Justification \\
+\midrule
+Neurones cachés & 32 & environ 420 textes : un réseau plus gros apprendrait par cœur \\
+Dropout & 0,3 & limite le sur-apprentissage \\
+Optimiseur & Adam, lr = 0,01 & converge vite sur un si petit réseau \\
+Époques & 30 & la perte de validation est minimale vers 20 époques \\
+Batch & tout le train & les données tiennent en mémoire \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Les courbes de perte (dans le notebook) montrent une baisse commune au début, puis la perte de train tend vers 0 tandis que celle de validation atteint son minimum à l'époque 21 (0,18) et remonte légèrement (0,20 à l'époque 30) : début de sur-apprentissage, d'où l'arrêt à 30 époques.
+
+\subsection{Transformer pré-entraîné : DistilBERT}
+
+\paragraph{Modèle.} \texttt{distilbert-base-uncased} : les textes sont en anglais, et cette version allégée de BERT (66 millions de paramètres) tourne sur CPU.
+
+\paragraph{Tokenisation.} Le tokeniseur WordPiece du modèle, appliqué au \textbf{texte brut} (le modèle a besoin de la phrase complète). Les mots inconnus sont découpés en sous-mots : \emph{rceeiver} devient \texttt{rc \#\#ee \#\#iver} au lieu d'être perdu. Longueur maximale : 64 tokens (le texte le plus long en fait 58, rien n'est tronqué).
+
+\paragraph{Entraînement.} On fait le minimum demandé : l'encodeur est \textbf{gelé}. Chaque texte passe une fois dans DistilBERT pour en extraire le vecteur du token \texttt{[CLS]} (768 valeurs), puis une tête linéaire \texttt{768 $\to$ 2} (1\,538 poids) est entraînée avec Adam (lr = 0,01) pendant 100 époques, sur tout le train à la fois. La perte de validation baisse jusqu'à la fin sans remonter. Affiner tout le modèle aurait été bien plus coûteux sur CPU, pour un gain probablement faible ici.
+
+\section{Résultats}
+
+\paragraph{Validation.} Les trois systèmes obtiennent une accuracy de 0,935 et un F1 macro de 0,934, avec 9 erreurs chacun sur 139 textes.
+
+\paragraph{Test (utilisé une seule fois).}
+
+\begin{center}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccccc}
+\toprule
+Système & Accuracy & Précision & Rappel & F1 macro & Erreurs & Entraînement & Inférence (test) \\
+\midrule
+Règles     & 0,848 & 0,875 & 0,861 & 0,848 & 20 & --      & 1,7 ms \\
+MLP        & 1,000 & 1,000 & 1,000 & 1,000 & 0  & 0,08 s  & 3,7 ms \\
+DistilBERT & 1,000 & 1,000 & 1,000 & 1,000 & 0  & 4,9 s   & 1,6 s \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Précision, rappel et F1 sont en moyenne macro. Les matrices de confusion sont dans le notebook : les 20 erreurs des règles sont toutes des textes de basket-ball classés football. Pour DistilBERT, les temps incluent le passage dans l'encodeur, obligatoire pour tout nouveau texte.
+
+Ces 100\,\% sont à relativiser : les 132 textes du test ne proviennent que de \textbf{20 textes originaux}. Les deux modèles ont surtout reconnu 20 situations de jeu, et une erreur sur un texte original se répète sur toutes ses variantes.
+
+\section{Analyse des erreurs}
+
+\paragraph{Règles (test).} Les 20 erreurs viennent de 5 textes originaux seulement, et sont toutes des égalités tranchées en faveur du football :
+\begin{enumerate}
+  \item \emph{The agile guard [\ldots] two-handed dunk} : aucun mot-clé. \emph{Dunk}, pourtant très typique, est trop rare dans le train pour entrer dans le lexique (7 variantes en erreur).
+  \item \emph{power forward [\ldots] deep in the post [\ldots] hook shot} : \emph{shot} compte pour le basket, mais \emph{deep} compte pour le football, où il n'apparaît que dans le train. Même mot, deux sens (9 variantes en erreur).
+  \item \emph{a wide-open three-pointer} : la tokenisation coupe \emph{wide-open} et \emph{wide} (de \emph{wide receiver}) passe côté football. Égalité 1--1.
+  \item \emph{pefrect fast rea,k [\ldots] alely-oop, catching the ball} : 2 mots-clés de chaque côté, les fautes cassent les autres indices (\emph{break}, \emph{alley-oop}).
+  \item \emph{gets a key steal [\ldots] easy score} : vocabulaire du basket (\emph{steal}, \emph{break}) mais absent du lexique.
+\end{enumerate}
+
+\paragraph{MLP et DistilBERT (validation, faute d'erreurs sur le test).}
+\begin{enumerate}[resume]
+  \item \emph{The coach [\ldots] calls a timeout [\ldots] final seconds of the fourth quarter} : les trois systèmes se trompent sur les 7 variantes. Le texte est réellement ambigu (temps mort et 4\textsuperscript{e} quart-temps existent dans les deux sports) : c'est une limite des données.
+  \item \emph{Th playr hits a half-cort shot} : les règles ont raison (\emph{hits}, \emph{shot}), le MLP se trompe sur les deux variantes ; les fautes font disparaître \emph{player} et \emph{court}. DistilBERT a raison grâce aux sous-mots.
+  \item \emph{The quaretrbakc throws a screen pass to the wid ereceiver} : DistilBERT prédit basket-ball. Les mots du football sont tous mal écrits et il reste \emph{screen}, action typique du basket. Les règles ont raison, mais par chance (aucun mot-clé, football par défaut).
+\end{enumerate}
+
+\section{Conclusion}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & Règles & MLP & DistilBERT \\
+\midrule
+F1 macro (test) & 0,85 & 1,00 & 1,00 \\
+Coût d'entraînement & aucun & $<$ 0,1 s & $\approx$ 5 s \\
+Taille & 30 mots & $\approx$ 31\,500 poids & 66 M paramètres ($\approx$ 250 Mo) \\
+Explicabilité & totale & partielle & faible \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Nous retiendrions le MLP.} Il fait jeu égal avec DistilBERT sur la validation comme sur le test, pour un coût bien plus faible : entraînement en moins d'une seconde, prédiction en quelques millisecondes, pas de modèle lourd à télécharger. Sur un problème au vocabulaire aussi marqué, la compréhension du contexte de DistilBERT n'apporte pas de gain visible.
+
+Les \textbf{règles} sont transparentes et immédiates, mais trop fragiles : un mot absent du lexique suffit à faire basculer la décision, et la règle d'égalité crée un biais systématique vers le football. \textbf{DistilBERT} deviendrait pertinent avec des textes plus variés ou plus bruités, car c'est le seul système qui résiste en partie aux fautes de frappe.
+
+\paragraph{Limites de l'étude.} Les données sont très petites (100 textes originaux) et les variantes se ressemblent beaucoup : les scores donnent un ordre de grandeur, pas une mesure précise, et quelques textes originaux suffisent à faire varier fortement les résultats. Certains textes, comme celui du coach, sont ambigus quelle que soit la méthode.
+
+\end{document}
